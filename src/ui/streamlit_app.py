@@ -1,4 +1,4 @@
 import streamlit as st
 
-st.title("Angrezi To SQL")
+st.title("SamvadSQL")
 st.write("Backend not implemented yet but UI should run fine.")
