@@ -4,6 +4,9 @@ from typing import Dict, List, Optional
 
 from src.db.introspection import ColumnInfo
 from src.models import QueryAnalysis, ScenarioDefinition
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class DataGenerator:
@@ -20,6 +23,7 @@ class DataGenerator:
         if "performance" in scenario.tags:
             row_count = 200
 
+        logger.debug("Generating rows for scenario '%s' for %d tables", scenario.name, len(schema_snapshot))
         for table_name, columns in schema_snapshot.items():
             table_rows: List[dict] = []
             for idx in range(row_count):
@@ -31,6 +35,7 @@ class DataGenerator:
                 if row:
                     table_rows.append(row)
             rows_by_table[table_name] = table_rows
+            logger.debug("Generated %d rows for table %s", len(table_rows), table_name)
 
         return rows_by_table
  

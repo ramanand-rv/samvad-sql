@@ -6,12 +6,15 @@ from psycopg2 import sql
 
 from src.config import settings
 from src.db.temp_db_manager_pg import PostgresTempDBManager
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def setup_template_database(schema_file: str = "src/db/schema.sql") -> None:
     manager = PostgresTempDBManager(template_db=settings.test_db_template)
     schema_sql = Path(schema_file).read_text(encoding="utf-8")
-
+    logger.info("Setting up template database '%s' from %s", settings.test_db_template, schema_file)
     with manager._admin_connection(autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -38,8 +41,7 @@ def setup_template_database(schema_file: str = "src/db/schema.sql") -> None:
         with template_conn.cursor() as template_cur:
             template_cur.execute(schema_sql)
         template_conn.commit()
-
-    print(f"Template database '{settings.test_db_template}' is ready.")
+    logger.info("Template database '%s' is ready.", settings.test_db_template)
 
 
 if __name__ == "__main__":

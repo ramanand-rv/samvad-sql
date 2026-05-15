@@ -8,6 +8,9 @@ import psycopg2.extras
 from psycopg2 import sql
 
 from src.config import settings
+from src.logging_config import get_logger, redact_db_url
+
+logger = get_logger(__name__)
 
 
 class PostgresTempDBManager:
@@ -16,9 +19,11 @@ class PostgresTempDBManager:
     def __init__(self, template_db: str | None = None):
         self.base_db = settings.postgres_db
         self.template_db = template_db or settings.test_db_template or self.base_db
+        logger.info("PostgresTempDBManager initialized: base_db=%s template_db=%s", self.base_db, self.template_db)
 
     def create_scenario_db(self) -> str:
         db_name = f"scenario_{uuid.uuid4().hex[:10]}"
+        logger.info("Creating scenario database '%s' from template '%s'", db_name, self.template_db)
         with self._admin_connection(autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -30,6 +35,7 @@ class PostgresTempDBManager:
         return db_name
 
     def drop_scenario_db(self, db_name: str) -> None:
+        logger.info("Dropping scenario database '%s'", db_name)
         with self._admin_connection(autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -50,21 +56,27 @@ class PostgresTempDBManager:
     def execute_inserts(self, db_name: str, insert_statements: List[str]) -> None:
         if not insert_statements:
             return
+        logger.debug("Executing %d insert statements on %s", len(insert_statements), db_name)
         with self._connection(dbname=db_name) as conn:
             with conn.cursor() as cur:
                 for stmt in insert_statements:
                     if stmt.strip():
+                        logger.debug("INSERT: %s", stmt if len(stmt) < 200 else stmt[:200] + "...")
                         cur.execute(stmt)
             conn.commit()
+            logger.debug("Committed inserts to %s", db_name)
 
     def execute_query(self, db_name: str, query: str) -> List[Dict]:
+        logger.debug("Executing query on %s: %s", db_name, query if len(query) < 300 else query[:300] + "...")
         with self._connection(dbname=db_name) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(query)
                 if cur.description is None:
                     conn.commit()
+                    logger.debug("Query returned no rows (non-select)")
                     return []
                 rows = cur.fetchall()
+                logger.debug("Query returned %d rows", len(rows))
                 return [dict(row) for row in rows]
 
     def execute_in_transaction(
@@ -77,6 +89,7 @@ class PostgresTempDBManager:
 
         This provides fast, isolated execution without creating/dropping databases.
         """
+        logger.debug("Executing in-transaction on base DB: %s", self.base_db)
         conn = self._connection(dbname=self.base_db)
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -87,6 +100,7 @@ class PostgresTempDBManager:
                 )
                 for stmt in insert_statements:
                     if stmt.strip():
+                        logger.debug("TX INSERT: %s", stmt if len(stmt) < 200 else stmt[:200] + "...")
                         cur.execute(stmt)
 
                 cur.execute(query)
@@ -99,6 +113,7 @@ class PostgresTempDBManager:
                 return rows
         except Exception:
             conn.rollback()
+            logger.exception("Error during transactional execution, rolled back")
             raise
         finally:
             conn.close()
@@ -107,7 +122,7 @@ class PostgresTempDBManager:
         schema: Dict[str, List[str]] = {}
         if not tables:
             return schema
-
+        logger.debug("Fetching schema for tables: %s", tables)
         with self._connection(dbname=self.base_db) as conn:
             with conn.cursor() as cur:
                 for raw_table in tables:
@@ -123,11 +138,13 @@ class PostgresTempDBManager:
                         (schema_name, table_name),
                     )
                     columns = [row[0] for row in cur.fetchall()]
+                    logger.debug("Table %s.%s columns: %s", schema_name, table_name, columns[:10])
                     if columns:
                         schema[raw_table] = columns
         return schema
 
     def list_user_schemas(self) -> List[str]:
+        logger.debug("Listing user schemas in %s", self.base_db)
         with self._connection(dbname=self.base_db) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -138,9 +155,12 @@ class PostgresTempDBManager:
                     ORDER BY schema_name
                     """
                 )
-                return [row[0] for row in cur.fetchall()]
+                schemas = [row[0] for row in cur.fetchall()]
+                logger.debug("Found schemas: %s", schemas[:10])
+                return schemas
 
     def get_erd_metadata(self, schema_name: str) -> Dict:
+        logger.debug("Fetching ERD metadata for schema: %s", schema_name)
         with self._connection(dbname=self.base_db) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -254,7 +274,14 @@ class PostgresTempDBManager:
         return schema_name.strip('"'), pure_table_name.strip('"')
 
     def _connection(self, dbname: str, autocommit: bool = False):
-        conn = psycopg2.connect(**self._connection_kwargs(dbname))
+        kwargs = self._connection_kwargs(dbname)
+        safe = None
+        if "dsn" in kwargs:
+            safe = redact_db_url(kwargs.get("dsn") or "")
+        else:
+            safe = f"{kwargs.get('user','?')}@{kwargs.get('host','localhost')}:{kwargs.get('port',5432)}/{kwargs.get('dbname', dbname)}"
+        logger.debug("Opening psycopg2 connection to %s", safe)
+        conn = psycopg2.connect(**kwargs)
         conn.autocommit = autocommit
         return conn
 
@@ -263,20 +290,24 @@ class PostgresTempDBManager:
 
     @staticmethod
     def _connection_kwargs(dbname: str) -> Dict:
+        # If a full DSN is provided, prefer it.
+        if settings.database_url and settings.database_url.strip():
+            logger.debug("Using full DSN for connection to %s", redact_db_url(settings.database_url))
+            return {"dsn": settings.database_url, "dbname": dbname}
+
         has_explicit_pg = bool(settings.postgres_host and settings.postgres_user)
         if has_explicit_pg:
+            logger.debug("Building connection kwargs for host=%s user=%s db=%s", settings.postgres_host, settings.postgres_user, dbname)
             kwargs: Dict = {
                 "host": settings.postgres_host,
                 "port": settings.postgres_port,
                 "user": settings.postgres_user,
-                "password": settings.postgres_password,
                 "dbname": dbname,
             }
+            if settings.postgres_password:
+                kwargs["password"] = settings.postgres_password
             if settings.postgres_sslmode:
                 kwargs["sslmode"] = settings.postgres_sslmode
             return kwargs
-
-        if settings.database_url:
-            return {"dsn": settings.database_url, "dbname": dbname}
 
         return {"dbname": dbname}

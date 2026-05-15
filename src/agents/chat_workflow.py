@@ -13,6 +13,9 @@ from sqlglot.errors import ParseError
 
 from src.db import get_engine
 from src.models import ChartSpec, ChatRequest, ChatResponse, WorkflowStep
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -32,10 +35,12 @@ class SchemaParserAgent:
             """
         )
         schema: Dict[str, List[str]] = {}
+        logger.debug("Parsing schema via engine")
         with engine.connect() as conn:
             for row in conn.execute(query).mappings():
                 table = f'{row["table_schema"]}.{row["table_name"]}'
                 schema.setdefault(table, []).append(row["column_name"])
+        logger.debug("Parsed schema with %d tables", len(schema))
         return schema
 
 
@@ -46,11 +51,13 @@ class QueryInterpreterAgent:
     def interpret(self, user_message: str, schema: Dict[str, List[str]]) -> Tuple[List[str], str]:
         stripped = user_message.strip().rstrip(";")
         if self._looks_like_sql(stripped):
+            logger.debug("Interpret: input looks like SQL, using directly")
             return [stripped + ";"], "Input appears to be SQL; using it directly."
 
         if not self.llm:
             if schema:
                 first_table = next(iter(schema.keys()))
+                logger.debug("LLM unavailable, falling back to preview query on %s", first_table)
                 return [f'SELECT * FROM {first_table} LIMIT 25;'], (
                     "LLM is unavailable. Ran a safe preview query on the first available table."
                 )
@@ -243,17 +250,20 @@ class ChatExecutorAgent:
         rows: List[Dict[str, Any]] = []
         columns: List[str] = []
         execution_note = "Executed successfully."
-
+        logger.debug("ChatExecutor: executing %d statements (preview_limit=%d)", len(sql_statements), preview_limit)
         with engine.begin() as conn:
             for stmt in sql_statements:
+                logger.debug("EXEC SQL: %s", stmt if len(stmt) < 200 else stmt[:200] + "...")
                 result = conn.execute(text(stmt))
                 if result.returns_rows:
                     mapped = result.mappings().fetchmany(preview_limit)
                     rows = [dict(r) for r in mapped]
                     columns = list(rows[0].keys()) if rows else []
                     execution_note = f"Fetched {len(rows)} rows (preview)."
+                    logger.debug("Statement returned %d rows (preview)", len(rows))
                 else:
                     execution_note = f"Statement affected {int(result.rowcount or 0)} rows."
+                    logger.debug("Statement affected %d rows", int(result.rowcount or 0))
         return columns, rows, execution_note
 
 
@@ -274,6 +284,8 @@ class ChatWorkflow:
                 response=ChatResponse(status="error", message="Message cannot be empty.")
             )
 
+        logger.info("ChatWorkflow.run invoked (preview): %s", request.message[:160])
+
         try:
             engine = get_engine()
         except Exception as exc:
@@ -283,6 +295,8 @@ class ChatWorkflow:
                     message=f"Database not configured: {exc}",
                 )
             )
+
+        logger.debug("Acquired engine for chat workflow; parsing schema next")
 
         steps.append(WorkflowStep(icon="🔍", message="Parsing schema"))
         try:
@@ -401,9 +415,11 @@ class ChatWorkflow:
             return ChatResponse(status="error", message=f"Database not configured: {exc}", steps=steps, sql=sql_statements)
 
         steps.append(WorkflowStep(icon="📊", message="Executing SQL"))
+        logger.info("Executing SQL bundle (statements=%d)", len(sql_statements))
         try:
             columns, rows, note = self.executor.execute(engine, sql_statements, preview_limit)
         except Exception as exc:
+            logger.exception("Execution of SQL bundle failed")
             return ChatResponse(
                 status="error",
                 message=f"Execution failed: {exc}",

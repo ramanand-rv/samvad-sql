@@ -1,8 +1,11 @@
-import os
 from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class Settings(BaseSettings):
@@ -30,19 +33,14 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
-    postgres_host: str = os.getenv("POSTGRES_HOST", "localhost")
-    postgres_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
-    postgres_user: str = os.getenv("POSTGRES_USER", "postgres")
-    postgres_password: str = os.getenv("POSTGRES_PASSWORD", "")
-    postgres_db: str = os.getenv("POSTGRES_DB", "sql_testing_db")
-    database_url: str = f"postgresql+psycopg2://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+    # Prefer an explicit DATABASE_URL; otherwise allow individual POSTGRES_* parts.
+    database_url: str = ""
+    postgres_host: str | None = None
+    postgres_port: int = 5432
+    postgres_user: str | None = None
+    postgres_password: str = ""
+    postgres_db: str | None = None
 
-    # database_url: str = ""
-    # postgres_host: str = ""
-    # postgres_port: int = 5432
-    # postgres_user: str = ""
-    # postgres_password: str = ""
-    # postgres_db: str = ""
     postgres_admin_db: str = "postgres"
     postgres_sslmode: str = ""
     test_db_template: str = Field(
@@ -63,7 +61,8 @@ class Settings(BaseSettings):
 
     @property
     def has_database(self) -> bool:
-        if self.database_url.strip():
+        db_url = (self.database_url or "").strip()
+        if db_url:
             return True
         return bool(self.postgres_host and self.postgres_user and self.postgres_db)
 
@@ -73,3 +72,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+logger.info("Loaded settings: app=%s env=%s has_database=%s", settings.app_name, settings.app_env, settings.has_database)

@@ -5,6 +5,9 @@ from typing import Dict, List, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -34,9 +37,11 @@ def table_exists(connection: Connection, table_name: str) -> bool:
         )
         """
     )
-    return bool(
+    exists = bool(
         connection.execute(query, {"schema_name": schema, "table_name": table}).scalar()
     )
+    logger.debug("table_exists: %s -> %s", table_name, exists)
+    return exists
 
 
 def get_table_columns(connection: Connection, table_name: str) -> List[ColumnInfo]:
@@ -55,7 +60,7 @@ def get_table_columns(connection: Connection, table_name: str) -> List[ColumnInf
         """
     )
     rows = connection.execute(query, {"schema_name": schema, "table_name": table}).mappings()
-    return [
+    columns = [
         ColumnInfo(
             name=row["column_name"],
             data_type=row["data_type"],
@@ -64,6 +69,8 @@ def get_table_columns(connection: Connection, table_name: str) -> List[ColumnInf
         )
         for row in rows
     ]
+    logger.debug("get_table_columns %s.%s -> %d columns", schema, table, len(columns))
+    return columns
 
 
 def load_schema_snapshot(engine: Engine, tables: List[str]) -> Dict[str, List[ColumnInfo]]:
@@ -71,4 +78,5 @@ def load_schema_snapshot(engine: Engine, tables: List[str]) -> Dict[str, List[Co
     with engine.connect() as connection:
         for table in tables:
             snapshot[table] = get_table_columns(connection, table)
+            logger.debug("Loaded schema snapshot for %s -> %d cols", table, len(snapshot[table]))
     return snapshot

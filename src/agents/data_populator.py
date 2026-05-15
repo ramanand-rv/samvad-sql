@@ -5,6 +5,9 @@ from typing import Dict, List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 import sqlparse
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class DataPopulator:
@@ -22,6 +25,8 @@ class DataPopulator:
         """
         if not tables or not schema:
             return []
+
+        logger.debug("Generating data for scenario '%s' tables=%s", scenario.get("name"), tables)
 
         if not self.llm:
             return self._fallback_inserts(tables=tables, schema=schema)
@@ -62,7 +67,7 @@ class DataPopulator:
             if inserts:
                 return inserts
         except Exception:
-            pass
+            logger.exception("LLM failed to generate inserts; falling back")
         return self._fallback_inserts(tables=tables, schema=schema)
 
     @staticmethod
@@ -100,6 +105,7 @@ class DataPopulator:
             else:
                 relation = f'"{schema_name}"."{table_name}"'
             inserts.append(f"INSERT INTO {relation} ({column_list}) VALUES ({value_list});")
+        logger.debug("Fallback generated %d insert statements", len(inserts))
         return inserts
 
     @staticmethod

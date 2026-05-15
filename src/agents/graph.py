@@ -24,6 +24,9 @@ from src.models import (
     TestQueryRequest,
     TestQueryResponse,
 )
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class GraphState(TypedDict, total=False):
@@ -52,6 +55,7 @@ class SQLTestingGraph:
         self.test_executor = TestExecutor(llm=llm, db_manager=self.db_manager)
         self.report_builder = ReportBuilder()
         self.graph = self._build_graph()
+        logger.info("SQLTestingGraph initialized (max_scenarios=%s)", settings.max_scenarios)
 
     def _build_graph(self):
         builder = StateGraph(GraphState)
@@ -100,7 +104,9 @@ class SQLTestingGraph:
                     analysis = self.query_analyzer.analyze(effective_sql)
             except Exception as exc:
                 repair_notes.append(f"SQL auto-repair skipped: {exc}")
+                logger.exception("Auto-repair skipped due to error")
 
+        logger.debug("analyze_query_node: query_type=%s tables=%s", analysis.query_type, analysis.tables)
         return {"analysis": analysis, "effective_sql": effective_sql, "repair_notes": repair_notes}
 
     def generate_scenarios_node(self, state: GraphState) -> GraphState:
@@ -117,8 +123,10 @@ class SQLTestingGraph:
         schema: Dict[str, List[str]] = {}
         if analysis.tables:
             try:
+                logger.debug("Loading table schema for analysis tables: %s", analysis.tables)
                 schema = self.db_manager.get_table_schema(analysis.tables)
             except Exception:
+                logger.exception("Failed to load schema for analysis tables")
                 schema = {}
         return {"scenarios": scenarios, "schema": schema}
 
@@ -183,6 +191,7 @@ class SQLTestingGraph:
                 )
                 for scenario in scenarios
             ]
+            logger.warning("Database not configured; skipping execution of %d scenarios", len(scenarios))
             return {"results": results}
 
         results: List[ScenarioExecutionResult] = []

@@ -12,6 +12,9 @@ from sqlglot.errors import ParseError
 
 from src.db.temp_db_manager_pg import PostgresTempDBManager
 from src.config import settings
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class TestExecutor:
@@ -49,6 +52,7 @@ class TestExecutor:
         attempted_repairs: Set[str] = set()
         last_error: Optional[Exception] = None
         retry_notes: List[str] = []
+        logger.info("Running scenario '%s' (isolation_mode=%s)", scenario.get("name"), isolation_mode)
         try:
             actual: List[Dict] = []
             max_attempts = max(1, settings.max_retry_attempts + 1)
@@ -62,6 +66,7 @@ class TestExecutor:
                         )
                     else:
                         db_name = self.db_manager.create_scenario_db()
+                        logger.debug("Created scenario DB: %s", db_name)
                         self.db_manager.execute_inserts(db_name, working_statements)
                         actual = self.db_manager.execute_query(db_name, user_sql)
                     last_error = None

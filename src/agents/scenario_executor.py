@@ -12,6 +12,10 @@ from sqlglot.errors import ParseError
 from src.agents.data_generator import DataGenerator
 from src.db.introspection import ColumnInfo, get_table_columns, split_table_name, table_exists
 from src.models import QueryAnalysis, ScenarioDefinition, ScenarioExecutionResult, ScenarioStatus
+from src.logging_config import get_logger
+
+logger = get_logger(__name__)
+from src.config import settings
 
 
 class ScenarioExecutor:
@@ -48,9 +52,11 @@ class ScenarioExecutor:
         generate_missing_data: bool,
     ) -> ScenarioExecutionResult:
         start = perf_counter()
+        logger.info("Executing scenario '%s' for query (timeout=%dms)", scenario.scenario_id, settings.scenario_timeout_ms if hasattr(settings, 'scenario_timeout_ms') else 0)
 
         try:
             with self.engine.connect() as connection:
+                logger.debug("Acquired DB connection for scenario %s", scenario.scenario_id)
                 tx = connection.begin()
                 try:
                     schema_snapshot = self._prepare_shadow_tables(connection, analysis.tables)
@@ -63,6 +69,7 @@ class ScenarioExecutor:
                             analysis=analysis,
                         )
                         generated_rows = self._insert_rows(connection, rows_by_table)
+                        logger.debug("Inserted %d generated rows for scenario %s", generated_rows, scenario.scenario_id)
 
                     result = connection.execute(text(sql_query))
                     if result.returns_rows:
@@ -122,6 +129,7 @@ class ScenarioExecutor:
             target_table = f'"{table_name}"'
 
             # Temporary table shadows the real one for unqualified references.
+            logger.debug("Creating TEMP TABLE %s from %s", target_table, source_table)
             connection.execute(
                 text(f"CREATE TEMP TABLE {target_table} (LIKE {source_table} INCLUDING ALL) ON COMMIT DROP")
             )
@@ -147,6 +155,7 @@ class ScenarioExecutor:
                 stmt = text(
                     f'INSERT INTO "{table_name}" ({quoted_columns}) VALUES ({placeholders})'
                 )
+                logger.debug("Inserting row into %s: %s", table_name, {k: (v if isinstance(v,(int,str)) else str(v)) for k,v in row.items()})
                 connection.execute(stmt, row)
                 total += 1
 

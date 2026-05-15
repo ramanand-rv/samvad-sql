@@ -1,4 +1,3 @@
-import logging
 import uuid
 from contextlib import asynccontextmanager
 from threading import Lock
@@ -18,12 +17,9 @@ from src.models import (
     TestQueryRequest,
     TestQueryResponse,
 )
+from src.logging_config import get_logger, redact_db_url
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 BANNER = r"""
  ▄▄▄▄▄▄▄                               ▄▄    ▄▄▄▄▄▄▄   ▄▄▄▄▄   ▄▄▄      
@@ -39,13 +35,25 @@ async def lifespan(app: FastAPI):
     logger.info("Starting %s in %s mode", settings.app_name, settings.app_env)
     # Print ASCII banner on startup
     logger.info("\n%s", BANNER)
+    # Helpful DB startup context
+    try:
+        logger.info(
+            "Database configured=%s, DSN=%s",
+            settings.has_database,
+            redact_db_url(settings.database_url),
+        )
+    except Exception:
+        logger.debug("Unable to introspect DB settings at startup.")
     yield
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 llm = get_llm()
+logger.info("LLM provider: %s (enabled=%s)", settings.llm_provider, bool(llm))
 graph = SQLTestingGraph(llm=llm)
+logger.info("SQLTestingGraph initialized")
 chat_workflow = ChatWorkflow(llm=llm)
+logger.info("ChatWorkflow initialized")
 pending_actions: Dict[str, Dict[str, Any]] = {}
 pending_lock = Lock()
 
