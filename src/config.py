@@ -1,3 +1,4 @@
+import os
 from typing import Literal
 
 from pydantic import AliasChoices, Field
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     postgres_user: str = os.getenv("POSTGRES_USER", "postgres")
     postgres_password: str = os.getenv("POSTGRES_PASSWORD", "")
     postgres_db: str = os.getenv("POSTGRES_DB", "sql_testing_db")
+    database_url: str = f"postgresql+psycopg2://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
 
     # database_url: str = ""
     # postgres_host: str = ""
@@ -52,7 +54,7 @@ class Settings(BaseSettings):
 
     max_scenarios: int = 8
     max_retry_attempts: int = 2
-    scenario_timeout_ms: int = 15000
+    scenario_timeout_ms: int = 20000
     test_isolation_mode: Literal["transaction", "database"] = "transaction"
     test_isolation_auto_fallback: bool = True
 
